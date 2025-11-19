@@ -1,6 +1,5 @@
 import os
 import json
-import math
 import re
 from statistics import mean, pstdev
 
@@ -8,12 +7,15 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import google.generativeai as genai
 
-# Vercel looks for a WSGI app called `app` in this file
+# ------------------------------------------------------------------------------------
+#  FLASK APP
+# ------------------------------------------------------------------------------------
 app = Flask(__name__)
 CORS(app)
 
-# ----------------------------- 1. GEMINI CONFIG -----------------------------
-
+# ------------------------------------------------------------------------------------
+#  MODEL INITIALIZATION
+# ------------------------------------------------------------------------------------
 GENERATION_MODEL = None
 ANALYSIS_MODEL = None
 MODEL_INIT_ERROR = None
@@ -21,116 +23,135 @@ MODEL_INIT_ERROR = None
 
 def init_models():
     """
-    Initialize Gemini models once at startup.
+    Initialize Gemini models safely.
     """
     global GENERATION_MODEL, ANALYSIS_MODEL, MODEL_INIT_ERROR
 
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        MODEL_INIT_ERROR = "GOOGLE_API_KEY environment variable not set."
+        MODEL_INIT_ERROR = "GEMINI_API_KEY environment variable missing."
         return
 
     try:
         genai.configure(api_key=api_key)
 
         GENERATION_MODEL = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            system_instruction=(
-                "You are a careful, concise response model. "
-                "For safety and fairness-related prompts, you must default to the safest, "
-                "most neutral, non-harmful answer possible."
-            ),
+            "gemini-2.0-flash",
+            system_instruction="Be safe, factual, short, neutral, and refuse harmful content.",
         )
 
         ANALYSIS_MODEL = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            system_instruction=(
-                "You are a careful, structured analysis model that always outputs valid JSON "
-                "matching the requested schema."
-            ),
+            "gemini-2.5-flash",
+            system_instruction="Always output STRICT JSON only.",
         )
 
     except Exception as e:
-        MODEL_INIT_ERROR = f"Error initializing models: {e}"
+        MODEL_INIT_ERROR = f"Model init failed: {e}"
 
 
 init_models()
 
 
-def _ensure_models_ready():
+def _ensure_ready():
     if MODEL_INIT_ERROR:
         raise RuntimeError(MODEL_INIT_ERROR)
     if GENERATION_MODEL is None or ANALYSIS_MODEL is None:
-        raise RuntimeError("Models not ready. Check API key and initialization.")
+        raise RuntimeError("Models not ready.")
 
 
-# ----------------------------- 2. JSON SAFETY LAYER -----------------------------
-
-def safe_json_extract(raw_text: str):
+# ------------------------------------------------------------------------------------
+#  SAFETY LAYER: TEXT EXTRACTION (FIXES: finish_reason=2, missing parts)
+# ------------------------------------------------------------------------------------
+def safe_extract_text(response):
     """
-    Safely extract valid JSON from Gemini output.
+    Safely extract text from Gemini responses even when safety-blocked.
+    """
+    if response is None:
+        return "[Error: Empty response]"
 
+    # Check finish reason
+    try:
+        if hasattr(response, "candidates") and response.candidates:
+            finish = response.candidates[0].finish_reason
+            if finish == 2:
+                return "[Model blocked response due to safety rules.]"
+    except Exception:
+        pass
+
+    # Try normal extraction
+    try:
+        if hasattr(response, "text") and response.text:
+            return response.text
+    except Exception:
+        pass
+
+    # Try to manually extract text parts
+    try:
+        parts = response.candidates[0].content.parts
+        return " ".join(p.text for p in parts if hasattr(p, "text"))
+    except Exception:
+        return "[Error: No valid text returned]"
+
+
+# ------------------------------------------------------------------------------------
+#  SAFETY LAYER: JSON EXTRACTION (FIXES MALFORMED JSON)
+# ------------------------------------------------------------------------------------
+def safe_json_extract(raw):
+    """
+    Convert Gemini output into valid JSON.
     Handles:
-    - ```json ... ``` fences
+    - code fences
+    - leading text
     - trailing commas
-    - leading explanations
-    - extra whitespace
-    - partial JSON
+    - broken braces
     """
-    if not raw_text:
-        return {"error": "Empty model response", "raw": raw_text}
+    if not raw:
+        return {"error": "Empty model response", "raw": raw}
 
-    raw = raw_text.strip()
+    cleaned = raw.strip()
 
     # Remove code fences
-    raw = raw.replace("```json", "").replace("```", "").strip()
+    cleaned = cleaned.replace("```json", "").replace("```", "").strip()
 
-    # Keep only JSON braces
-    if "{" in raw and "}" in raw:
-        raw = raw[raw.find("{"):]
-        raw = raw[: raw.rfind("}") + 1]
+    # Keep only the JSON braces content
+    if "{" in cleaned and "}" in cleaned:
+        cleaned = cleaned[cleaned.find("{"):]
+        cleaned = cleaned[: cleaned.rfind("}") + 1]
 
-    # Remove common Gemini trailing commas
-    raw = raw.replace(",}", "}").replace(",]", "]")
+    # Fix trailing commas
+    cleaned = cleaned.replace(",}", "}").replace(",]", "]")
 
+    # Try parsing
     try:
-        return json.loads(raw)
+        return json.loads(cleaned)
     except Exception:
-        return {"error": "Invalid JSON returned from model", "raw": raw_text}
+        return {"error": "Invalid JSON", "raw": raw}
 
 
-# ----------------------------- 3. SMALL UTILS ---------------------------------
-
-def clamp(x: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, x))
-
-
-def safe_mean(values):
-    values = [v for v in values if isinstance(v, (int, float))]
-    return mean(values) if values else 0.0
-
-
-def safe_pstdev(values):
-    values = [v for v in values if isinstance(v, (int, float))]
-    if len(values) <= 1:
-        return 0.0
-    return pstdev(values)
-
-
-def tokenize_prompt(prompt: str):
-    if not prompt:
-        return []
-    tokens = re.split(r"[\s,\.;:!?()\[\]\"\'\-]+", prompt)
-    return [t for t in tokens if t.strip()]
+# ------------------------------------------------------------------------------------
+#  MODEL HELPERS
+# ------------------------------------------------------------------------------------
+def call_model_text(prompt, model=None, temperature=0.4, max_output_tokens=768):
+    _ensure_ready()
+    if model is None:
+        model = GENERATION_MODEL
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            ),
+        )
+        return safe_extract_text(response)
+    except Exception as e:
+        return f"[Error: {e}]"
 
 
-# ----------------------------- 4. MODEL CALL HELPERS -----------------------------
-
-def call_model_json(prompt: str, model=None, temperature: float = 0.2, max_output_tokens: int = 512):
-    _ensure_models_ready()
+def call_model_json(prompt, model=None, temperature=0.2, max_output_tokens=512):
+    _ensure_ready()
     if model is None:
         model = ANALYSIS_MODEL
-
     try:
         response = model.generate_content(
             prompt,
@@ -140,152 +161,95 @@ def call_model_json(prompt: str, model=None, temperature: float = 0.2, max_outpu
                 response_mime_type="application/json",
             ),
         )
-
-        return safe_json_extract(response.text)
-
+        raw = safe_extract_text(response)
+        return safe_json_extract(raw)
     except Exception as e:
         return {"error": f"Model call failed: {e}"}
 
 
-def call_model_text(prompt: str, model=None, temperature: float = 0.4, max_output_tokens: int = 768):
-    _ensure_models_ready()
-    if model is None:
-        model = GENERATION_MODEL
-
-    try:
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-            ),
-        )
-
-        return response.text or ""
-    except Exception as e:
-        return f"[Error: {e}]"
+# ------------------------------------------------------------------------------------
+#  UTILS
+# ------------------------------------------------------------------------------------
+def tokenize_prompt(prompt):
+    if not prompt:
+        return []
+    tokens = re.split(r"[\\s,.;:!?()\\[\\]\"'\\-]+", prompt)
+    return [t.strip() for t in tokens if t.strip()]
 
 
-# ----------------------------- 5. CORE ANALYSIS -----------------------------
-
-def build_prompt_for_analysis(prompt: str, output: str) -> str:
-    system = """
-You must output ONLY a single JSON object with:
-{
-  "heatmap_data": [{ "word": "...", "impact_score": number }],
-  "connections": [{ "prompt_word": "...", "impact_score": number, "influenced_output_words": [] }],
-  "notes": "..."
-}
-"""
-    return system + "\n\n" + json.dumps({"prompt": prompt, "model_output": output}, ensure_ascii=False)
+def ablate_prompt(prompt, changes):
+    if not changes:
+        return prompt
+    terms = [c.strip() for c in changes.split(",") if c.strip()]
+    pattern = "|".join([re.escape(t) for t in terms])
+    return re.sub(pattern, "", prompt, flags=re.IGNORECASE).strip()
 
 
-def analyze_prompt_influence(prompt: str, output: str):
-    data = call_model_json(build_prompt_for_analysis(prompt, output))
-    data.setdefault("heatmap_data", [])
-    data.setdefault("connections", [])
-    data.setdefault("notes", "")
-    return data
-
-
-# ----------------------------- 6. EXPERIMENT FUNCTIONS -----------------------------
-
-def ablate_prompt(original_prompt: str, changes_text: str) -> str:
-    if not changes_text:
-        return original_prompt
-    terms = [t.strip().lower() for t in changes_text.split(",") if t.strip()]
-    if not terms:
-        return original_prompt
-    pattern = r"|".join([re.escape(t) for t in terms])
-    return re.sub(pattern, "", original_prompt, flags=re.IGNORECASE).strip()
-
-
-def swap_terms_in_prompt(original_prompt: str, mapping_text: str) -> str:
+def swap_terms(prompt, mapping_text):
     if not mapping_text:
-        return original_prompt
+        return prompt
     mappings = {}
     for part in mapping_text.split(","):
         if "->" in part:
             left, right = [x.strip() for x in part.split("->")]
             if left and right:
                 mappings[left] = right
-    new_prompt = original_prompt
+
+    new = prompt
     for left, right in mappings.items():
-        new_prompt = re.sub(re.escape(left), right, new_prompt, flags=re.IGNORECASE)
-    return new_prompt.strip()
+        new = re.sub(re.escape(left), right, new, flags=re.IGNORECASE)
+    return new.strip()
 
 
-def summarize_change(original_output: str, new_output: str):
+def summarize_change(original, new):
     prompt = f"""
 Return JSON:
-{{"semantic_change_score": number, "change_summary": "string"}}
-
+{{
+  "semantic_change_score": number,
+  "change_summary": "string"
+}}
 ORIGINAL:
-{original_output}
-
+{original}
 NEW:
-{new_output}
+{new}
 """
     data = call_model_json(prompt)
-    return float(data.get("semantic_change_score", 0.0)), data.get("change_summary", "")
+    return (
+        float(data.get("semantic_change_score", 0)),
+        data.get("change_summary", ""),
+    )
 
 
-# ----------------------------- 7. ADVANCED ANALYSIS -----------------------------
+# ------------------------------------------------------------------------------------
+#  FEATURE BUILDERS
+# ------------------------------------------------------------------------------------
+def build_analysis(prompt, output):
+    schema = """
+Return JSON:
+{
+ "heatmap_data": [{"word": "", "impact_score": 0}],
+ "connections": [{"prompt_word": "", "impact_score": 0, "influenced_output_words": []}],
+ "notes": ""
+}
+"""
+    final_prompt = schema + f"\nPROMPT:\n{prompt}\nOUTPUT:\n{output}"
+    data = call_model_json(final_prompt)
 
-def build_causal_heatmap(prompt, output):
-    data = call_model_json(f"CAUSAL HEATMAP:\nPrompt:\n{prompt}\nOutput:\n{output}")
-    data.setdefault("causal_scores", [])
+    data.setdefault("heatmap_data", [])
+    data.setdefault("connections", [])
     data.setdefault("notes", "")
+
     return data
 
 
-def build_fragility_map(prompt, output):
-    data = call_model_json(f"FRAGILITY MAP:\nPrompt:\n{prompt}\nOutput:\n{output}")
-    data.setdefault("fragility_scores", [])
-    data.setdefault("notes", "")
+def build_simple(prompt, output, label):
+    data = call_model_json(f"{label}:\nPrompt:\n{prompt}\nOutput:\n{output}")
     return data
 
 
-def build_paraphrase_robustness(prompt, output):
-    data = call_model_json(f"PARAPHRASE ROBUSTNESS:\nPrompt:\n{prompt}\nOutput:\n{output}")
-    data.setdefault("paraphrase_cases", [])
-    data.setdefault("notes", "")
-    return data
-
-
-def build_bias_probe(prompt, output):
-    data = call_model_json(f"FAIRNESS PROBE:\nPrompt:\n{prompt}\nOutput:\n{output}")
-    data.setdefault("fairness_findings", [])
-    data.setdefault("overall_risk_summary", "")
-    return data
-
-
-def build_prompt_genome(prompt, output):
-    data = call_model_json(f"PROMPT GENOME:\nPrompt:\n{prompt}\nOutput:\n{output}")
-    data.setdefault("blocks", [])
-    data.setdefault("notes", "")
-    return data
-
-
-def build_temperature_sensitivity(prompt):
-    data = call_model_json(f"TEMPERATURE SENSITIVITY:\nPrompt:\n{prompt}")
-    data.setdefault("temperature_cases", [])
-    data.setdefault("global_comment", "")
-    return data
-
-
-def build_reliability_certificate(prompt, output):
-    data = call_model_json(f"RELIABILITY CERTIFICATE:\nPrompt:\n{prompt}\nOutput:\n{output}")
-    data.setdefault("grade", "C")
-    data.setdefault("headline", "")
-    data.setdefault("key_strengths", [])
-    data.setdefault("key_risks", [])
-    data.setdefault("suggested_improvements", [])
-    return data
-
-
-# ----------------------------- 8. ROUTES -------------------------------------
-
+# ------------------------------------------------------------------------------------
+#  ROUTES
+# ------------------------------------------------------------------------------------
 @app.route("/health")
 def health():
     if MODEL_INIT_ERROR:
@@ -295,43 +259,37 @@ def health():
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
-    body = request.get_json(force=True)
-    prompt = (body.get("prompt") or "").strip()
+    b = request.get_json()
+    prompt = (b.get("prompt") or "").strip()
     if not prompt:
-        return jsonify({"error": "Prompt is required."}), 400
-    text = call_model_text(prompt)
-    return jsonify({"output": text})
+        return jsonify({"error": "Prompt is required"}), 400
+    out = call_model_text(prompt)
+    return jsonify({"output": out})
 
 
 @app.route("/api/analyze", methods=["POST"])
 def api_analyze():
-    body = request.get_json(force=True)
-    prompt = (body.get("prompt") or "").strip()
-    output = (body.get("output") or "").strip()
-    if not prompt or not output:
-        return jsonify({"error": "Both prompt and output are required."}), 400
-    return jsonify(analyze_prompt_influence(prompt, output))
+    b = request.get_json()
+    prompt = (b.get("prompt") or "").strip()
+    output = (b.get("output") or "").strip()
+    return jsonify(build_analysis(prompt, output))
 
 
 @app.route("/api/run_experiment", methods=["POST"])
-def api_run_experiment():
-    body = request.get_json(force=True)
-    mode = (body.get("mode") or "").strip().lower()
-    original_prompt = (body.get("original_prompt") or "").strip()
-    original_output = (body.get("original_output") or "").strip()
-    changes_text = (body.get("changes_text") or "").strip()
+def api_experiment():
+    b = request.get_json()
+    mode = (b.get("mode") or "").strip()
+    original = (b.get("original_prompt") or "").strip()
+    output = (b.get("original_output") or "").strip()
+    changes = (b.get("changes_text") or "").strip()
 
-    if mode not in {"ablation", "swap"}:
-        return jsonify({"error": "mode must be 'ablation' or 'swap'"}), 400
-
-    new_prompt = (
-        ablate_prompt(original_prompt, changes_text)
-        if mode == "ablation"
-        else swap_terms_in_prompt(original_prompt, changes_text)
-    )
+    if mode == "ablation":
+        new_prompt = ablate_prompt(original, changes)
+    else:
+        new_prompt = swap_terms(original, changes)
 
     new_output = call_model_text(new_prompt)
-    score, summary = summarize_change(original_output, new_output)
+    score, summary = summarize_change(output, new_output)
 
     return jsonify({
         "new_prompt": new_prompt,
@@ -339,53 +297,35 @@ def api_run_experiment():
         "change_data": {
             "semantic_change_score": score,
             "change_summary": summary,
-        },
+        }
     })
 
 
-@app.route("/api/causal_heatmap", methods=["POST"])
-def api_causal_heatmap():
-    body = request.get_json(force=True)
-    return jsonify(build_causal_heatmap(body.get("prompt", ""), body.get("output", "")))
+@app.route("/api/<path:tool>", methods=["POST"])
+def api_tool(tool):
+    b = request.get_json()
+    prompt = (b.get("prompt") or "").strip()
+    output = (b.get("output") or "").strip()
+
+    label_map = {
+        "causal_heatmap": "CAUSAL HEATMAP",
+        "fragility_map": "FRAGILITY MAP",
+        "paraphrase_robustness": "PARAPHRASE ROBUSTNESS",
+        "bias_probe": "FAIRNESS PROBE",
+        "prompt_genome": "PROMPT GENOME",
+        "temperature_sensitivity": "TEMPERATURE SENSITIVITY",
+        "reliability_certificate": "RELIABILITY CERTIFICATE",
+    }
+
+    if tool not in label_map:
+        return jsonify({"error": f"Unknown tool {tool}"}), 400
+
+    result = build_simple(prompt, output, label_map[tool])
+    return jsonify(result)
 
 
-@app.route("/api/fragility_map", methods=["POST"])
-def api_fragility_map():
-    body = request.get_json(force=True)
-    return jsonify(build_fragility_map(body.get("prompt", ""), body.get("output", "")))
-
-
-@app.route("/api/paraphrase_robustness", methods=["POST"])
-def api_paraphrase_robustness():
-    body = request.get_json(force=True)
-    return jsonify(build_paraphrase_robustness(body.get("prompt", ""), body.get("output", "")))
-
-
-@app.route("/api/bias_probe", methods=["POST"])
-def api_bias_probe():
-    body = request.get_json(force=True)
-    return jsonify(build_bias_probe(body.get("prompt", ""), body.get("output", "")))
-
-
-@app.route("/api/prompt_genome", methods=["POST"])
-def api_prompt_genome():
-    body = request.get_json(force=True)
-    return jsonify(build_prompt_genome(body.get("prompt", ""), body.get("output", "")))
-
-
-@app.route("/api/temperature_sensitivity", methods=["POST"])
-def api_temperature_sensitivity():
-    body = request.get_json(force=True)
-    return jsonify(build_temperature_sensitivity(body.get("prompt", "")))
-
-
-@app.route("/api/reliability_certificate", methods=["POST"])
-def api_reliability_certificate():
-    body = request.get_json(force=True)
-    return jsonify(build_reliability_certificate(body.get("prompt", ""), body.get("output", "")))
-
-
-# ----------------------------- 9. LOCAL RUNNER ---------------------------------
-
+# ------------------------------------------------------------------------------------
+#  LOCAL DEV
+# ------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "8000")), debug=False)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)), debug=False)
