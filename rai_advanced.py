@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import google.generativeai as genai
 
+# Vercel looks for a WSGI app called `app` in this file
 app = Flask(__name__)
 CORS(app)
 
@@ -21,6 +22,7 @@ MODEL_INIT_ERROR = None
 def init_models():
     """
     Initialize Gemini models once at startup.
+    This runs when Vercel imports the module and when run locally.
     """
     global GENERATION_MODEL, ANALYSIS_MODEL, MODEL_INIT_ERROR
 
@@ -95,7 +97,12 @@ def tokenize_prompt(prompt: str):
     return [t for t in tokens if t.strip()]
 
 
-def call_model_json(prompt: str, model=None, temperature: float = 0.2, max_output_tokens: int = 512):
+def call_model_json(
+    prompt: str,
+    model=None,
+    temperature: float = 0.2,
+    max_output_tokens: int = 512,
+):
     """
     Call Gemini and force a JSON object response. If parsing fails, raise an error.
     """
@@ -124,7 +131,12 @@ def call_model_json(prompt: str, model=None, temperature: float = 0.2, max_outpu
         raise RuntimeError(f"Model call failed: {e}")
 
 
-def call_model_text(prompt: str, model=None, temperature: float = 0.4, max_output_tokens: int = 768):
+def call_model_text(
+    prompt: str,
+    model=None,
+    temperature: float = 0.4,
+    max_output_tokens: int = 768,
+):
     """
     Call Gemini and return plain text.
     """
@@ -210,7 +222,6 @@ def analyze_prompt_influence(prompt: str, output: str):
     """
     analysis_prompt = build_prompt_for_analysis(prompt, output)
     data = call_model_json(analysis_prompt)
-    # Ensure required keys exist with safe defaults
     data.setdefault("heatmap_data", [])
     data.setdefault("connections", [])
     data.setdefault("notes", "")
@@ -305,10 +316,6 @@ NEW:
 
 
 def build_causal_heatmap(prompt: str, output: str):
-    """
-    Ask the analysis model to estimate how changes to each word might shift the answer.
-    """
-    words = tokenize_prompt(prompt)
     analysis_prompt = f"""
 You are analysing how each word in a prompt might influence the final answer.
 
@@ -345,9 +352,6 @@ Focus on:
 
 
 def build_fragility_map(prompt: str, output: str):
-    """
-    Ask the analysis model which words make the answer unstable or overly sensitive.
-    """
     analysis_prompt = f"""
 You are analysing how fragile a prompt is to small wording tweaks.
 
@@ -383,9 +387,6 @@ Return JSON:
 
 
 def build_paraphrase_robustness(prompt: str, output: str):
-    """
-    Probe how stable the answer is when we rephrase the prompt.
-    """
     analysis_prompt = f"""
 You are testing paraphrase robustness.
 
@@ -424,9 +425,6 @@ Return JSON:
 
 
 def build_bias_probe(prompt: str, output: str):
-    """
-    Probe fairness: what changes if we swap demographic attributes?
-    """
     analysis_prompt = f"""
 You are checking the prompt and answer for fairness issues.
 
@@ -462,9 +460,6 @@ Return JSON:
 
 
 def build_prompt_genome(prompt: str, output: str):
-    """
-    Split the prompt into 'blocks' (tone, safety, length, task, etc.).
-    """
     analysis_prompt = f"""
 You are dissecting a prompt into building blocks.
 
@@ -495,9 +490,6 @@ Return JSON:
 
 
 def build_temperature_sensitivity(prompt: str):
-    """
-    Predict how sensitive the answer is to model temperature (creativity).
-    """
     analysis_prompt = f"""
 You are explaining how 'temperature' affects responses for this prompt.
 
@@ -527,9 +519,6 @@ Return JSON:
 
 
 def build_reliability_certificate(prompt: str, output: str):
-    """
-    Give the user a single 'certificate' summary of risk, robustness, and fairness.
-    """
     analysis_prompt = f"""
 You are issuing a very short reliability certificate for a single prompt and answer.
 
@@ -592,7 +581,9 @@ def api_generate():
             return jsonify({"error": "Prompt is required."}), 400
 
         _ensure_models_ready()
-        text = call_model_text(prompt, model=GENERATION_MODEL, temperature=0.4, max_output_tokens=768)
+        text = call_model_text(
+            prompt, model=GENERATION_MODEL, temperature=0.4, max_output_tokens=768
+        )
         return jsonify({"output": text})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -622,24 +613,6 @@ def api_run_experiment():
     Run either:
     - ablation: remove some words from the prompt
     - swap: swap some terms in the prompt
-
-    Request:
-    {
-      "mode": "ablation" | "swap",
-      "original_prompt": "...",
-      "original_output": "...",
-      "changes_text": "..."
-    }
-
-    Response:
-    {
-      "new_prompt": "...",
-      "new_output": "...",
-      "change_data": {
-        "semantic_change_score": number,
-        "change_summary": "..."
-      }
-    }
     """
     try:
         body = request.get_json(force=True)
@@ -652,7 +625,9 @@ def api_run_experiment():
             return jsonify({"error": "mode must be 'ablation' or 'swap'"}), 400
 
         if not original_prompt or not original_output:
-            return jsonify({"error": "original_prompt and original_output are required."}), 400
+            return jsonify(
+                {"error": "original_prompt and original_output are required."}
+            ), 400
 
         if not changes_text:
             return jsonify({"error": "changes_text is required."}), 400
@@ -665,7 +640,9 @@ def api_run_experiment():
         if not new_prompt.strip():
             new_prompt = original_prompt
 
-        new_output = call_model_text(new_prompt, model=GENERATION_MODEL, temperature=0.4, max_output_tokens=768)
+        new_output = call_model_text(
+            new_prompt, model=GENERATION_MODEL, temperature=0.4, max_output_tokens=768
+        )
         score, summary = summarize_change(original_output, new_output)
 
         return jsonify(
@@ -786,9 +763,9 @@ def api_reliability_certificate():
         return jsonify({"error": str(e)}), 500
 
 
-# ----------------------------- 7. ENTRYPOINT --------------------------------
+# ----------------------------- 7. LOCAL ENTRYPOINT --------------------------
+# Vercel imports `app` and ignores this block. It is only for local dev.
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
     app.run(host="0.0.0.0", port=port, debug=False)
-

@@ -1,18 +1,12 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "rai_advanced.py",
-      "use": "@vercel/python"
-    },
-    {
-      "src": "index.html",
-      "use": "@vercel/static"
+  "functions": {
+    "rai_advanced.py": {
+      "runtime": "python3.11"
     }
-  ],
+  },
   "routes": [
     {
-      "src": "/api/(.*)",
+      "src": "^/api/(.*)$",
       "dest": "rai_advanced.py"
     },
     {
