@@ -26,7 +26,7 @@ def init_models():
     """
     global GENERATION_MODEL, ANALYSIS_MODEL, MODEL_INIT_ERROR
 
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         MODEL_INIT_ERROR = "GOOGLE_API_KEY environment variable not set."
         return
@@ -35,7 +35,7 @@ def init_models():
         genai.configure(api_key=api_key)
 
         GENERATION_MODEL = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name="gemini-2.0-flash",
             system_instruction=(
                 "You are a careful, concise response model. "
                 "For safety and fairness-related prompts, you must default to the safest, "
@@ -44,7 +44,7 @@ def init_models():
         )
 
         ANALYSIS_MODEL = genai.GenerativeModel(
-            model_name="gemini-1.5-pro",
+            model_name="gemini-2.5-flash",
             system_instruction=(
                 "You are a careful, structured analysis model that always outputs valid JSON "
                 "matching the requested schema."
