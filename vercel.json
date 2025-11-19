@@ -2,7 +2,7 @@
   "version": 2,
   "builds": [
     {
-      "src": "rai_advanced.py",
+      "src": "api/rai.py",
       "use": "@vercel/python"
     },
     {
@@ -12,20 +12,19 @@
     {
       "src": "factsh.jpeg",
       "use": "@vercel/static"
-    },
-    {
-      "src": "images/(.*)",
-      "use": "@vercel/static"
     }
   ],
   "routes": [
     {
-      "src": "^/api/(.*)$",
-      "dest": "rai_advanced.py"
+      "src": "/api/(.*)",
+      "dest": "api/rai.py"
     },
     {
-      "src": "/(.*\\.(png|jpg|jpeg|gif|svg|ico|webp))$",
-      "dest": "/$1"
+      "src": "/(.*\\.(png|jpg|jpeg|gif|svg|ico|css|js|webmanifest))$",
+      "dest": "/$1",
+      "headers": {
+        "cache-control": "s-maxage=31536000, immutable"
+      }
     },
     {
       "src": "/(.*)",
