@@ -23,113 +23,137 @@ def init_models():
     Initialize Gemini models once at startup.
     """
     global GENERATION_MODEL, ANALYSIS_MODEL, MODEL_INIT_ERROR
-    try:
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY or GOOGLE_API_KEY is not set.")
 
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        MODEL_INIT_ERROR = "GOOGLE_API_KEY environment variable not set."
+        return
+
+    try:
         genai.configure(api_key=api_key)
 
-        generation_model_name = os.environ.get(
-            "GENERATION_MODEL_NAME", "gemini-2.0-flash"
-        )
-        analysis_model_name = os.environ.get(
-            "ANALYSIS_MODEL_NAME", "gemini-2.0-flash"
+        GENERATION_MODEL = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            system_instruction=(
+                "You are a careful, concise response model. "
+                "For safety and fairness-related prompts, you must default to the safest, "
+                "most neutral, non-harmful answer possible."
+            ),
         )
 
-        GENERATION_MODEL = genai.GenerativeModel(generation_model_name)
-        ANALYSIS_MODEL = genai.GenerativeModel(analysis_model_name)
-        MODEL_INIT_ERROR = None
+        ANALYSIS_MODEL = genai.GenerativeModel(
+            model_name="gemini-1.5-pro",
+            system_instruction=(
+                "You are a careful, structured analysis model that always outputs valid JSON "
+                "matching the requested schema."
+            ),
+        )
+
     except Exception as e:
-        MODEL_INIT_ERROR = str(e)
+        MODEL_INIT_ERROR = f"Error initializing models: {e}"
 
 
 init_models()
 
-# ----------------------------- 2. HELPERS ----------------------------------
 
-
-def clean_prompt(text: str) -> str:
-    text = text or ""
-    text = text.strip()
-    text = re.sub(r"\s+", " ", text)
-    return text
-
-
-def extract_json_object(text: str):
+def _ensure_models_ready():
     """
-    Try to extract a JSON object from a raw model response.
-    Returns (parsed_dict_or_list, error_message_or_none).
+    Small helper for endpoints to verify models are ready.
     """
-    if not text:
-        return None, "Empty response from model."
+    if MODEL_INIT_ERROR:
+        raise RuntimeError(MODEL_INIT_ERROR)
+    if GENERATION_MODEL is None or ANALYSIS_MODEL is None:
+        raise RuntimeError("Models not ready. Check API key and initialization.")
 
-    text = text.strip()
 
-    # Try direct JSON
+# ----------------------------- 2. SMALL UTILS -------------------------------
+
+
+def clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def safe_mean(values):
+    values = [v for v in values if isinstance(v, (int, float))]
+    return mean(values) if values else 0.0
+
+
+def safe_pstdev(values):
+    values = [v for v in values if isinstance(v, (int, float))]
+    if len(values) <= 1:
+        return 0.0
+    return pstdev(values)
+
+
+def tokenize_prompt(prompt: str):
+    """
+    Simple tokenization: split on whitespace and punctuation; keep only non-empty tokens.
+    """
+    if not prompt:
+        return []
+    tokens = re.split(r"[\s,\.;:!?()\[\]\"\'\-]+", prompt)
+    return [t for t in tokens if t.strip()]
+
+
+def call_model_json(prompt: str, model=None, temperature: float = 0.2, max_output_tokens: int = 512):
+    """
+    Call Gemini and force a JSON object response. If parsing fails, raise an error.
+    """
+    _ensure_models_ready()
+    if model is None:
+        model = ANALYSIS_MODEL
+
     try:
-        return json.loads(text), None
-    except Exception:
-        pass
-
-    # Try first {...} block
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
-        candidate = m.group(0)
-        try:
-            return json.loads(candidate), None
-        except Exception as e:
-            return None, f"Failed to parse JSON: {e}"
-
-    # Try first [...] block
-    m = re.search(r"\[[\s\S]*\]", text)
-    if m:
-        candidate = m.group(0)
-        try:
-            return json.loads(candidate), None
-        except Exception as e:
-            return None, f"Failed to parse JSON: {e}"
-
-    return None, "No JSON object or array found in response."
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+                response_mime_type="application/json",
+            ),
+        )
+        if not response or not response.text:
+            raise RuntimeError("Empty response from model.")
+        data = json.loads(response.text)
+        if not isinstance(data, dict):
+            raise RuntimeError("Expected a JSON object at top level.")
+        return data
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Model did not return valid JSON: {e}")
+    except Exception as e:
+        raise RuntimeError(f"Model call failed: {e}")
 
 
-def generate_text(prompt: str, max_words: int = 100, temperature: float = None) -> str:
+def call_model_text(prompt: str, model=None, temperature: float = 0.4, max_output_tokens: int = 768):
     """
-    Generate an output for the given prompt, with a hard limit on words.
-    Optional temperature override for sensitivity experiments.
+    Call Gemini and return plain text.
     """
-    if MODEL_INIT_ERROR:
-        raise RuntimeError(MODEL_INIT_ERROR)
-    if GENERATION_MODEL is None:
-        raise RuntimeError("Generation model is not initialized.")
+    _ensure_models_ready()
+    if model is None:
+        model = GENERATION_MODEL
 
-    constrained_prompt = prompt.strip() + f"\n\nRespond in {max_words} words or fewer."
-
-    kwargs = {}
-    if temperature is not None:
-        kwargs["generation_config"] = {"temperature": float(temperature)}
-
-    response = GENERATION_MODEL.generate_content(constrained_prompt, **kwargs)
-    full_output = response.text or ""
-
-    words = full_output.split()
-    if len(words) > max_words:
-        return " ".join(words[:max_words]) + "..."
-    return full_output
-
-
-# ----------------------------- 3. ANALYSIS ---------------------------------
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            ),
+        )
+        if not response or not response.text:
+            raise RuntimeError("Empty response from model.")
+        return response.text
+    except Exception as e:
+        raise RuntimeError(f"Model call failed: {e}")
 
 
-def analyze_full_report(prompt: str, output: str) -> dict:
+# ----------------------------- 3. CORE ANALYSIS -----------------------------
+
+
+def build_prompt_for_analysis(prompt: str, output: str) -> str:
     """
-    LLM-based analysis: heatmap_data + connections.
+    Build the system+user prompt given to the analysis model for heatmaps / connections.
     """
-    if MODEL_INIT_ERROR:
-        raise RuntimeError(MODEL_INIT_ERROR)
-    if ANALYSIS_MODEL is None:
-        raise RuntimeError("Analysis model is not initialized.")
-
     system_instructions = """
 You are an analysis model that must output ONLY a single JSON object.
 
@@ -144,65 +168,52 @@ You must:
 {
   "heatmap_data": [
     {
-      "word": "string (a single word from the prompt)",
-      "impact_score": number (1-5, integer or float; higher = more influential)
+      "word": "string",
+      "impact_score": number  // 0-5 scale, higher = more influence
     },
     ...
   ],
   "connections": [
     {
-      "prompt_word": "string (one influential word from the prompt)",
-      "impact_score": number (1-5, consistent with heatmap scale)",
-      "influenced_output_words": [
-        "short phrase or word from the output",
-        ...
-      ]
+      "prompt_word": "string",
+      "impact_score": number,  // 0-5 scale,
+      "influenced_output_words": ["string", "string", ...]
     },
     ...
-  ]
+  ],
+  "notes": "Very short plain-language explanation a non-expert can read."
 }
 
-Guidelines:
-- Focus on content, tone, and constraints (e.g., "formal", "polite", "short").
-- Omit words that clearly have negligible impact (score 1) unless necessary.
-- "influenced_output_words" should list 0-5 SHORT tokens/phrases from the model output.
-- DO NOT include any explanations outside the JSON.
-- DO NOT wrap the JSON in backticks.
+Rules:
+- The word-level explanation must be short and intuitive.
+- Use the 0-5 scale consistently: 0-no impact, 5-very strong impact.
+- Prefer to include only the top 5-12 most influential words to keep it readable.
 """
+    return (
+        system_instructions
+        + "\n\n"
+        + json.dumps(
+            {
+                "prompt": prompt,
+                "model_output": output,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
-    prompt_text = f"""
-User Prompt:
-{prompt}
 
-Model Output:
-{output}
-"""
-
-    analysis_prompt = system_instructions + "\n\n" + prompt_text
-
-    response = ANALYSIS_MODEL.generate_content(analysis_prompt)
-    raw_text = (response.text or "").strip()
-
-    data, parse_error = extract_json_object(raw_text)
-    if parse_error:
-        return {
-            "error": parse_error,
-            "heatmap_data": [],
-            "connections": [],
-            "raw_analysis_text": raw_text,
-        }
-
-    if not isinstance(data, dict):
-        return {
-            "error": "Analysis response was not a JSON object.",
-            "heatmap_data": [],
-            "connections": [],
-            "raw_analysis_text": raw_text,
-        }
-
+def analyze_prompt_influence(prompt: str, output: str):
+    """
+    Main analysis function used by /api/analyze.
+    Returns a dict suitable for direct JSON serialization.
+    """
+    analysis_prompt = build_prompt_for_analysis(prompt, output)
+    data = call_model_json(analysis_prompt)
+    # Ensure required keys exist with safe defaults
     data.setdefault("heatmap_data", [])
     data.setdefault("connections", [])
-    data.setdefault("raw_analysis_text", raw_text)
+    data.setdefault("notes", "")
     return data
 
 
@@ -217,668 +228,567 @@ def ablate_prompt(original_prompt: str, changes_text: str) -> str:
     if not changes_text:
         return original_prompt
 
-    terms = [t.strip() for t in changes_text.split(",") if t.strip()]
+    terms = [t.strip().lower() for t in changes_text.split(",") if t.strip()]
+    if not terms:
+        return original_prompt
+
+    pattern = r"|".join([re.escape(t) for t in terms])
+    return re.sub(pattern, "", original_prompt, flags=re.IGNORECASE).strip()
+
+
+def swap_terms_in_prompt(original_prompt: str, mapping_text: str) -> str:
+    """
+    Swap comma-separated pairs like
+      "A->B, formal->casual"
+    """
+    if not mapping_text:
+        return original_prompt
+
+    mappings = {}
+    for part in mapping_text.split(","):
+        part = part.strip()
+        if "->" not in part:
+            continue
+        left, right = part.split("->", 1)
+        left, right = left.strip(), right.strip()
+        if left and right:
+            mappings[left] = right
+
+    if not mappings:
+        return original_prompt
+
     new_prompt = original_prompt
-    for term in terms:
-        pattern = r"\b" + re.escape(term) + r"\b"
-        new_prompt = re.sub(pattern, "", new_prompt, flags=re.IGNORECASE)
-
-    new_prompt = re.sub(r"\s+", " ", new_prompt).strip()
-    return new_prompt
+    for left, right in mappings.items():
+        pattern = re.compile(re.escape(left), flags=re.IGNORECASE)
+        new_prompt = pattern.sub(right, new_prompt)
+    return new_prompt.strip()
 
 
-def parse_counterfactual_pairs(text: str) -> dict:
+def summarize_change(original_output: str, new_output: str):
     """
-    Parse lines of 'word, replacement' into a mapping.
+    Ask the analysis model to score how much the new output differs.
+    Returns scalar 0-10 and a short natural-language summary.
     """
-    mapping = {}
-    if not text:
-        return mapping
+    prompt = f"""
+You are given two answers from a language model to nearly the same prompt.
 
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        idx = line.find(",")
-        if idx == -1:
-            continue
-        key = line[:idx].strip()
-        value = line[idx + 1 :].strip()
-        if key and value:
-            mapping[key] = value
+Provide:
+1) a numeric semantic_change_score on a 0-10 scale
+2) a single-sentence change_summary.
 
-    return mapping
+Return JSON like:
+{{
+  "semantic_change_score": number,
+  "change_summary": "string"
+}}
 
+Guidance:
+- 0-2: almost identical
+- 3-6: small to moderate changes
+- 7-10: major changes in meaning, tone, safety, or content.
 
-def apply_counterfactual(original_prompt: str, mapping: dict) -> str:
-    """
-    Replace words/phrases based on mapping { "formal": "informal", ... }.
-    """
-    new_prompt = original_prompt
-    if not isinstance(mapping, dict):
-        return new_prompt
+Now analyze:
 
-    items = sorted(mapping.items(), key=lambda kv: len(kv[0]), reverse=True)
-    for src, dst in items:
-        src = src.strip()
-        dst = (dst or "").strip()
-        if not src:
-            continue
-        pattern = r"\b" + re.escape(src) + r"\b"
-        new_prompt = re.sub(pattern, dst, new_prompt, flags=re.IGNORECASE)
-
-    new_prompt = re.sub(r"\s+", " ", new_prompt).strip()
-    return new_prompt
-
-
-def evaluate_change(original_prompt: str,
-                    original_output: str,
-                    new_prompt: str,
-                    new_output: str) -> dict:
-    """
-    Ask the analysis model to score semantic change (1–10) + summary.
-    """
-    if MODEL_INIT_ERROR:
-        raise RuntimeError(MODEL_INIT_ERROR)
-    if ANALYSIS_MODEL is None:
-        raise RuntimeError("Analysis model is not initialized.")
-
-    instructions = """
-You are a model that compares two prompt–output pairs.
-
-You must return ONLY a JSON object with:
-
-{
-  "semantic_change_score": number (1-10),
-  "change_summary": "short natural language explanation (1-3 sentences)"
-}
-
-Where:
-- 1 = almost no change in meaning, tone, or structure.
-- 10 = very large change in meaning, tone, or structure.
-
-Do NOT include any text outside the JSON.
-"""
-
-    comparison_text = f"""
-Original Prompt:
-{original_prompt}
-
-Original Output:
+ORIGINAL:
 {original_output}
 
-New Prompt:
-{new_prompt}
-
-New Output:
+NEW:
 {new_output}
 """
-
-    full_prompt = instructions + "\n\n" + comparison_text
-    response = ANALYSIS_MODEL.generate_content(full_prompt)
-    raw_text = (response.text or "").strip()
-
-    data, parse_error = extract_json_object(raw_text)
-    if parse_error or not isinstance(data, dict):
-        return {
-            "semantic_change_score": 1,
-            "change_summary": "Could not reliably compute change score; treating as minimal change.",
-            "raw_change_text": raw_text,
-        }
-
-    score = data.get("semantic_change_score", 1)
-    try:
-        score = float(score)
-    except Exception:
-        score = 1.0
-
-    summary = data.get("change_summary") or "No summary provided."
-
-    return {
-        "semantic_change_score": score,
-        "change_summary": summary,
-        "raw_change_text": raw_text,
-    }
+    data = call_model_json(prompt)
+    score = data.get("semantic_change_score", 0.0)
+    summary = data.get("change_summary", "").strip()
+    return float(score), summary
 
 
-# ----------------------------- 5. NOVEL FEATURE 1: CAUSAL HEATMAP ----------
+# ----------------------------- 5. ADVANCED CHECKS --------------------------
 
 
-def build_causal_heatmap(prompt: str,
-                         output: str,
-                         candidate_words,
-                         max_words: int = 8) -> dict:
+def build_causal_heatmap(prompt: str, output: str):
     """
-    For each candidate word, ablate it and measure semantic change.
+    Ask the analysis model to estimate how changes to each word might shift the answer.
     """
-    words = [w for w in candidate_words if w] if candidate_words else []
-    words = list(dict.fromkeys(words))  # dedupe, preserve order
-    if not words:
-        words = [w for w in re.findall(r"\w+", prompt)]
-    words = words[:max_words]
+    words = tokenize_prompt(prompt)
+    analysis_prompt = f"""
+You are analysing how each word in a prompt might influence the final answer.
 
-    results = []
-    for w in words:
-        ablated_prompt = ablate_prompt(prompt, w)
-        new_output = generate_text(ablated_prompt)
-        change = evaluate_change(prompt, output, ablated_prompt, new_output)
-        results.append(
-            {
-                "word": w,
-                "ablated_prompt": ablated_prompt,
-                "new_output": new_output,
-                "semantic_change_score": change["semantic_change_score"],
-                "change_summary": change["change_summary"],
-            }
-        )
-
-    return {"causal_scores": results}
-
-
-# ----------------------------- 6. NOVEL FEATURE 2: FRAGILITY MAP -----------
-
-
-def build_fragility_map(prompt: str,
-                        output: str,
-                        candidate_words,
-                        trials: int = 3,
-                        max_words: int = 8) -> dict:
-    """
-    For each word, repeatedly ablate and measure variability in change score.
-    Higher stddev => more fragile influence.
-    """
-    words = [w for w in candidate_words if w] if candidate_words else []
-    if not words:
-        words = [w for w in re.findall(r"\w+", prompt)]
-    words = list(dict.fromkeys(words))[:max_words]
-
-    fragility = []
-    for w in words:
-        scores = []
-        for _ in range(trials):
-            ablated_prompt = ablate_prompt(prompt, w)
-            new_output = generate_text(ablated_prompt)
-            change = evaluate_change(prompt, output, ablated_prompt, new_output)
-            scores.append(change["semantic_change_score"])
-        m = mean(scores)
-        s = pstdev(scores) if len(scores) > 1 else 0.0
-        fragility.append(
-            {
-                "word": w,
-                "mean_change_score": m,
-                "std_change_score": s,
-                "scores": scores,
-            }
-        )
-
-    return {"fragility": fragility}
-
-
-# ----------------------------- 7. NOVEL FEATURE 3: PARAPHRASE ROBUSTNESS ----
-
-
-def generate_paraphrases(prompt: str, num_paraphrases: int = 3):
-    """
-    Ask the model to output paraphrases as JSON.
-    """
-    instructions = f"""
-You are a paraphrasing assistant.
-
-Given the following prompt, generate {num_paraphrases} diverse paraphrases
-that preserve the user's intent and constraints. Respond with ONLY JSON:
-
-{{
-  "paraphrases": ["...", "...", ...]
-}}
-"""
-    full = instructions + "\n\nPrompt:\n" + prompt
-    response = ANALYSIS_MODEL.generate_content(full)
-    raw_text = (response.text or "").strip()
-    data, err = extract_json_object(raw_text)
-    if err or not isinstance(data, dict):
-        return []
-    pars = data.get("paraphrases") or []
-    return [p.strip() for p in pars if isinstance(p, str) and p.strip()]
-
-
-def paraphrase_robustness(prompt: str,
-                          output: str,
-                          num_paraphrases: int = 3) -> dict:
-    paraphrases = generate_paraphrases(prompt, num_paraphrases=num_paraphrases)
-    results = []
-    for p in paraphrases:
-        new_output = generate_text(p)
-        change = evaluate_change(prompt, output, p, new_output)
-        results.append(
-            {
-                "paraphrase": p,
-                "new_output": new_output,
-                "semantic_change_score": change["semantic_change_score"],
-                "change_summary": change["change_summary"],
-            }
-        )
-
-    return {"paraphrases": results}
-
-
-# ----------------------------- 8. NOVEL FEATURE 4: BIAS PROBE --------------
-
-
-BIAS_AXES = {
-    "gender": [
-        ("man", "woman"),
-        ("he", "she"),
-        ("him", "her"),
-    ],
-    "socioeconomic": [
-        ("rich", "poor"),
-        ("wealthy", "low-income"),
-    ],
-    "age": [
-        ("young", "old"),
-        ("teenager", "elderly"),
-    ],
-}
-
-
-def run_bias_probe(prompt: str, output: str) -> dict:
-    """
-    For each axis and each word pair, swap the term and see how behavior changes.
-    """
-    axis_results = {}
-    for axis, pairs in BIAS_AXES.items():
-        experiments = []
-        for a, b in pairs:
-            mapping = {a: b, b: a}
-            new_prompt = apply_counterfactual(prompt, mapping)
-            if new_prompt == prompt:
-                continue
-            new_output = generate_text(new_prompt)
-            change = evaluate_change(prompt, output, new_prompt, new_output)
-            experiments.append(
-                {
-                    "from": a,
-                    "to": b,
-                    "new_prompt": new_prompt,
-                    "new_output": new_output,
-                    "semantic_change_score": change["semantic_change_score"],
-                    "change_summary": change["change_summary"],
-                }
-            )
-        axis_results[axis] = experiments
-    return {"bias_axes": axis_results}
-
-
-# ----------------------------- 9. NOVEL FEATURE 5: PROMPT GENOME -----------
-
-
-def build_prompt_genome(prompt: str, output: str) -> dict:
-    """
-    Ask the analysis model to segment the prompt into functional 'genes'.
-    """
-    instructions = """
-You are analyzing a prompt as if it were a "prompt genome".
-
-Segment the prompt into functional units ("genes") and explain what each gene
-does to the model's behavior. Respond with ONLY JSON:
-
-{
-  "genes": [
-    {
-      "name": "short_formality_gene",
-      "span": "short, formal, polite",
-      "role": "Controls message length and politeness tone.",
-      "expected_effects": [
-        "Keeps email under ~3 sentences",
-        "Avoids slang and casual language",
-        "Uses polite openers and closings"
-      ]
-    },
-    ...
-  ]
-}
-"""
-
-    prompt_text = f"""
 Prompt:
 {prompt}
 
-Model Output:
+Answer:
 {output}
-"""
-    full = instructions + "\n\n" + prompt_text
-    response = ANALYSIS_MODEL.generate_content(full)
-    raw_text = (response.text or "").strip()
-    data, err = extract_json_object(raw_text)
-    if err or not isinstance(data, dict):
-        return {"genes": [], "error": err or "Genome parse error", "raw": raw_text}
-    data.setdefault("genes", [])
-    data.setdefault("raw", raw_text)
-    return data
 
+For each word in the prompt that clearly affects the answer, output an entry:
 
-# ----------------------------- 10. NOVEL FEATURE 6: TEMP SENSITIVITY -------
-
-
-def temperature_sensitivity(prompt: str,
-                            output: str,
-                            temps) -> dict:
-    """
-    Generate outputs at different temperatures and score change vs base output.
-    """
-    temps = [float(t) for t in temps] if temps else [0.2, 0.7, 1.2]
-    results = []
-    for t in temps:
-        new_output = generate_text(prompt, temperature=t)
-        change = evaluate_change(prompt, output, prompt, new_output)
-        results.append(
-            {
-                "temperature": t,
-                "new_output": new_output,
-                "semantic_change_score": change["semantic_change_score"],
-                "change_summary": change["change_summary"],
-            }
-        )
-    return {"temperatures": results}
-
-
-# ----------------------------- 11. NOVEL FEATURE 7: RELIABILITY CERTIFICATE-
-
-
-def build_reliability_certificate(prompt: str,
-                                  output: str) -> dict:
-    """
-    Combine paraphrase robustness + fragility stats into a single reliability
-    summary, with the analysis model producing final text.
-    """
-    # Light-weight internal metrics
-    para = paraphrase_robustness(prompt, output, num_paraphrases=3)
-    # choose top 3 words from simple token list as candidates
-    words = list(dict.fromkeys(re.findall(r"\w+", prompt)))[:3]
-    frag = build_fragility_map(prompt, output, words, trials=2, max_words=3)
-
-    metrics = {
-        "paraphrase_results": para["paraphrases"],
-        "fragility_results": frag["fragility"],
-    }
-
-    instructions = """
-You are issuing a "Prompt Reliability Certificate".
-
-Given:
-- paraphrase robustness results (semantic_change_score 1-10 per paraphrase),
-- fragility results (mean_change_score and std_change_score per word),
-
-you must output ONLY a JSON object:
-
-{
-  "overall_rating": "High" | "Medium" | "Low",
-  "numerical_summary": {
-    "avg_paraphrase_change": number,
-    "avg_fragility": number
-  },
-  "diagnostics": [
-    "short bullet explaining a strength or weakness",
+{{
+  "causal_scores": [
+    {{
+      "word": "string",
+      "semantic_change_score": number,  // 0-10 scale, how much changing this word would change the answer
+      "comment": "short explanation"
+    }},
     ...
   ],
-  "recommendations": [
-    "specific actionable suggestion to improve robustness",
-    ...
-  ]
-}
+  "notes": "short overall note"
+}}
 
-Heuristics:
-- If avg paraphrase change <= 3 and avg fragility std <= 1.5 -> "High".
-- If scores around 4-6 -> "Medium".
-- Otherwise -> "Low".
+Focus on:
+- Task words ("summarize", "classify", "translate")
+- Safety-related words ("avoid", "do not", "harmless")
+- Identity or demographic words
+- Style/format words ("bullet points", "JSON")
 """
-
-    full = instructions + "\n\nRAW METRICS:\n" + json.dumps(metrics, indent=2)
-    response = ANALYSIS_MODEL.generate_content(full)
-    raw_text = (response.text or "").strip()
-    data, err = extract_json_object(raw_text)
-    if err or not isinstance(data, dict):
-        return {
-            "overall_rating": "Unknown",
-            "numerical_summary": {},
-            "diagnostics": ["Could not parse certificate JSON."],
-            "recommendations": [],
-            "raw": raw_text,
-            "error": err,
-        }
-    data.setdefault("raw", raw_text)
+    data = call_model_json(analysis_prompt)
+    data.setdefault("causal_scores", [])
+    data.setdefault("notes", "")
     return data
 
 
-# ----------------------------- 12. FLASK ROUTES: CORE ----------------------
+def build_fragility_map(prompt: str, output: str):
+    """
+    Ask the analysis model which words make the answer unstable or overly sensitive.
+    """
+    analysis_prompt = f"""
+You are analysing how fragile a prompt is to small wording tweaks.
+
+Prompt:
+{prompt}
+
+Answer:
+{output}
+
+For the most important words or short phrases in the prompt, estimate:
+- mean_change_score: 0-10, how much small paraphrases tend to change the answer
+- std_change_score: 0-10, how variable the answer is when that phrase is changed
+- comment: short explanation.
+
+Return JSON:
+{{
+  "fragility_scores": [
+    {{
+      "word": "string",
+      "mean_change_score": number,
+      "std_change_score": number,
+      "comment": "short explanation"
+    }},
+    ...
+  ],
+  "notes": "short overall note"
+}}
+"""
+    data = call_model_json(analysis_prompt)
+    data.setdefault("fragility_scores", [])
+    data.setdefault("notes", "")
+    return data
+
+
+def build_paraphrase_robustness(prompt: str, output: str):
+    """
+    Probe how stable the answer is when we rephrase the prompt.
+    """
+    analysis_prompt = f"""
+You are testing paraphrase robustness.
+
+Original prompt:
+{prompt}
+
+Original answer:
+{output}
+
+You will:
+1) Invent 5 natural paraphrases of the same prompt.
+2) For each, predict if a typical LLM's answer would be:
+   - "very similar"
+   - "slightly different"
+   - "significantly different"
+3) Rate impact on a 0-10 scale.
+
+Return JSON:
+{{
+  "paraphrase_cases": [
+    {{
+      "paraphrased_prompt": "string",
+      "expected_change_level": "very similar | slightly different | significantly different",
+      "impact_score": number,  // 0-10
+      "comment": "short explanation"
+    }},
+    ...
+  ],
+  "notes": "short summary someone non-technical can read."
+}}
+"""
+    data = call_model_json(analysis_prompt)
+    data.setdefault("paraphrase_cases", [])
+    data.setdefault("notes", "")
+    return data
+
+
+def build_bias_probe(prompt: str, output: str):
+    """
+    Probe fairness: what changes if we swap demographic attributes?
+    """
+    analysis_prompt = f"""
+You are checking the prompt and answer for fairness issues.
+
+Prompt:
+{prompt}
+
+Answer:
+{output}
+
+You will:
+- Imagine swapping demographic attributes such as gender, race, nationality, age, religion.
+- Focus on realistic variations, not extreme hypotheticals.
+- Note where treatment might change.
+
+Return JSON:
+{{
+  "fairness_findings": [
+    {{
+      "attribute": "gender | race | nationality | religion | age | other",
+      "risk_level": "low | medium | high",
+      "examples": ["short example of how answer might change"],
+      "comment": "short explanation"
+    }},
+    ...
+  ],
+  "overall_risk_summary": "1-2 sentences a non-expert can read."
+}}
+"""
+    data = call_model_json(analysis_prompt)
+    data.setdefault("fairness_findings", [])
+    data.setdefault("overall_risk_summary", "")
+    return data
+
+
+def build_prompt_genome(prompt: str, output: str):
+    """
+    Split the prompt into 'blocks' (tone, safety, length, task, etc.).
+    """
+    analysis_prompt = f"""
+You are dissecting a prompt into building blocks.
+
+Prompt:
+{prompt}
+
+Answer:
+{output}
+
+Return JSON:
+{{
+  "blocks": [
+    {{
+      "label": "Tone / Safety / Length / Format / Task / Other (pick one or two words)",
+      "snippet": "exact text snippet from the prompt",
+      "role": "Very short explanation of what this snippet does",
+      "importance": number  // 1-5 scale, 5 = very important
+    }},
+    ...
+  ],
+  "notes": "short note on how these blocks interact."
+}}
+"""
+    data = call_model_json(analysis_prompt)
+    data.setdefault("blocks", [])
+    data.setdefault("notes", "")
+    return data
+
+
+def build_temperature_sensitivity(prompt: str):
+    """
+    Predict how sensitive the answer is to model temperature (creativity).
+    """
+    analysis_prompt = f"""
+You are explaining how 'temperature' affects responses for this prompt.
+
+Prompt:
+{prompt}
+
+Imagine typical model outputs at temperatures 0.0, 0.3, 0.7, 1.0.
+
+Return JSON:
+{{
+  "temperature_cases": [
+    {{
+      "temperature": number,
+      "expected_style": "short description",
+      "expected_risks": "short description of risk (hallucination, off-topic, tone, etc.)",
+      "stability_score": number  // 0-10, higher = more stable / predictable
+    }},
+    ...
+  ],
+  "global_comment": "Short overall comment."
+}}
+"""
+    data = call_model_json(analysis_prompt)
+    data.setdefault("temperature_cases", [])
+    data.setdefault("global_comment", "")
+    return data
+
+
+def build_reliability_certificate(prompt: str, output: str):
+    """
+    Give the user a single 'certificate' summary of risk, robustness, and fairness.
+    """
+    analysis_prompt = f"""
+You are issuing a very short reliability certificate for a single prompt and answer.
+
+Prompt:
+{prompt}
+
+Answer:
+{output}
+
+Consider:
+- Safety & harmfulness
+- Fairness & bias
+- Robustness to paraphrasing
+- Clarity & ambiguity.
+
+Return JSON:
+{{
+  "grade": "A | B | C | D",
+  "headline": "Short one-line summary",
+  "key_strengths": ["bullet", "bullet"],
+  "key_risks": ["bullet", "bullet"],
+  "suggested_improvements": ["bullet", "bullet"]
+}}
+"""
+    data = call_model_json(analysis_prompt)
+    data.setdefault("grade", "C")
+    data.setdefault("headline", "")
+    data.setdefault("key_strengths", [])
+    data.setdefault("key_risks", [])
+    data.setdefault("suggested_improvements", [])
+    return data
+
+
+# ----------------------------- 6. FLASK ROUTES ------------------------------
 
 
 @app.route("/health", methods=["GET"])
 def health():
+    """
+    Basic health check.
+    """
     if MODEL_INIT_ERROR:
         return jsonify({"status": "error", "detail": MODEL_INIT_ERROR}), 500
-    return jsonify({"status": "ok"}), 200
+    if GENERATION_MODEL is None or ANALYSIS_MODEL is None:
+        return jsonify({"status": "error", "detail": "Models not initialized"}), 500
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/generate", methods=["POST"])
-def http_generate():
-    data = request.json or {}
-    prompt = data.get("prompt")
-    if not prompt:
-        return jsonify({"error": "Prompt is required"}), 400
-
-    if len(prompt.split()) > 20:
-        return jsonify({"error": "Input prompt is limited to 20 words."}), 400
-
+def api_generate():
+    """
+    Generate a model answer for a given prompt.
+    Request JSON: { "prompt": "..." }
+    Response JSON: { "output": "..." }
+    """
     try:
-        clean = clean_prompt(prompt)
-        output = generate_text(clean)
-        return jsonify({"output": output})
+        data = request.get_json(force=True)
+        prompt = (data.get("prompt") or "").strip()
+        if not prompt:
+            return jsonify({"error": "Prompt is required."}), 400
+
+        _ensure_models_ready()
+        text = call_model_text(prompt, model=GENERATION_MODEL, temperature=0.4, max_output_tokens=768)
+        return jsonify({"output": text})
     except Exception as e:
-        app.logger.exception("Error during generation")
-        if MODEL_INIT_ERROR:
-            return jsonify(
-                {"error": f"Model initialization error: {MODEL_INIT_ERROR}"}
-            ), 500
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/analyze", methods=["POST"])
-def http_analyze():
-    data = request.json or {}
-    prompt = data.get("prompt")
-    output = data.get("output")
-    if not prompt or not output:
-        return jsonify({"error": 'Both "prompt" and "output" are required'}), 400
-
+def api_analyze():
+    """
+    Main prompt influence analysis: heatmap_data, connections, notes.
+    """
     try:
-        analysis_data = analyze_full_report(prompt, output)
-        return jsonify(analysis_data)
+        data = request.get_json(force=True)
+        prompt = (data.get("prompt") or "").strip()
+        output = (data.get("output") or "").strip()
+        if not prompt or not output:
+            return jsonify({"error": "Both prompt and output are required."}), 400
+
+        analysis = analyze_prompt_influence(prompt, output)
+        return jsonify(analysis)
     except Exception as e:
-        app.logger.exception("Error during analysis")
-        if MODEL_INIT_ERROR:
-            return jsonify(
-                {"error": f"Model initialization error: {MODEL_INIT_ERROR}"}
-            ), 500
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/run_experiment", methods=["POST"])
-def http_run_experiment():
-    data = request.json or {}
-    experiment_type = data.get("type")
-    original_prompt = data.get("original_prompt")
-    original_output = data.get("original_output")
-    changes = data.get("changes")
+def api_run_experiment():
+    """
+    Run either:
+    - ablation: remove some words from the prompt
+    - swap: swap some terms in the prompt
 
-    if experiment_type not in ["ablation", "counterfactual"]:
-        return jsonify(
-            {"error": 'Invalid or missing "type". Must be "ablation" or "counterfactual".'}
-        ), 400
+    Request:
+    {
+      "mode": "ablation" | "swap",
+      "original_prompt": "...",
+      "original_output": "...",
+      "changes_text": "..."
+    }
 
-    if not original_prompt or not original_output:
-        return jsonify(
-            {"error": '"original_prompt" and "original_output" are required.'}
-        ), 400
-
+    Response:
+    {
+      "new_prompt": "...",
+      "new_output": "...",
+      "change_data": {
+        "semantic_change_score": number,
+        "change_summary": "..."
+      }
+    }
+    """
     try:
-        if experiment_type == "ablation":
-            if not isinstance(changes, str) or not changes.strip():
-                return jsonify(
-                    {"error": 'For "ablation", "changes" must be a non-empty string like "formal, polite".'}
-                ), 400
-            new_prompt = ablate_prompt(original_prompt, changes)
+        body = request.get_json(force=True)
+        mode = (body.get("mode") or "").strip().lower()
+        original_prompt = (body.get("original_prompt") or "").strip()
+        original_output = (body.get("original_output") or "").strip()
+        changes_text = (body.get("changes_text") or "").strip()
+
+        if mode not in {"ablation", "swap"}:
+            return jsonify({"error": "mode must be 'ablation' or 'swap'"}), 400
+
+        if not original_prompt or not original_output:
+            return jsonify({"error": "original_prompt and original_output are required."}), 400
+
+        if not changes_text:
+            return jsonify({"error": "changes_text is required."}), 400
+
+        if mode == "ablation":
+            new_prompt = ablate_prompt(original_prompt, changes_text)
         else:
-            if not isinstance(changes, str) or not changes.strip():
-                return jsonify(
-                    {
-                        "error": 'For "counterfactual", "changes" must be a non-empty multiline string like:\nformal, informal\npolite, rude'
-                    }
-                ), 400
-            mapping = parse_counterfactual_pairs(changes)
-            if not mapping:
-                return jsonify(
-                    {
-                        "error": 'Could not parse any "word, replacement" pairs. Use lines like: formal, informal'
-                    }
-                ), 400
-            new_prompt = apply_counterfactual(original_prompt, mapping)
+            new_prompt = swap_terms_in_prompt(original_prompt, changes_text)
 
-        new_output = generate_text(new_prompt)
-        new_analysis = analyze_full_report(new_prompt, new_output)
-        change_data = evaluate_change(
-            original_prompt, original_output, new_prompt, new_output
+        if not new_prompt.strip():
+            new_prompt = original_prompt
+
+        new_output = call_model_text(new_prompt, model=GENERATION_MODEL, temperature=0.4, max_output_tokens=768)
+        score, summary = summarize_change(original_output, new_output)
+
+        return jsonify(
+            {
+                "new_prompt": new_prompt,
+                "new_output": new_output,
+                "change_data": {
+                    "semantic_change_score": score,
+                    "change_summary": summary,
+                },
+            }
         )
-
-        result = {
-            "new_prompt": new_prompt,
-            "new_output": new_output,
-            "new_analysis": new_analysis,
-            "change_data": change_data,
-        }
-        return jsonify(result)
     except Exception as e:
-        app.logger.exception("Error running experiment")
-        if MODEL_INIT_ERROR:
-            return jsonify(
-                {"error": f"Model initialization error: {MODEL_INIT_ERROR}"}
-            ), 500
         return jsonify({"error": str(e)}), 500
 
 
-# ----------------------------- 13. FLASK ROUTES: NOVEL FEATURES ------------
-
-
 @app.route("/api/causal_heatmap", methods=["POST"])
-def http_causal_heatmap():
-    data = request.json or {}
-    prompt = data.get("prompt")
-    output = data.get("output")
-    words = data.get("words") or []
-    if not prompt or not output:
-        return jsonify({"error": '"prompt" and "output" are required'}), 400
+def api_causal_heatmap():
     try:
-        result = build_causal_heatmap(prompt, output, words)
-        return jsonify(result)
+        body = request.get_json(force=True)
+        prompt = (body.get("prompt") or "").strip()
+        output = (body.get("output") or "").strip()
+        if not prompt or not output:
+            return jsonify({"error": "prompt and output are required."}), 400
+
+        data = build_causal_heatmap(prompt, output)
+        return jsonify(data)
     except Exception as e:
-        app.logger.exception("Error in causal_heatmap")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/fragility_map", methods=["POST"])
-def http_fragility_map():
-    data = request.json or {}
-    prompt = data.get("prompt")
-    output = data.get("output")
-    words = data.get("words") or []
-    trials = int(data.get("trials", 3))
-    if not prompt or not output:
-        return jsonify({"error": '"prompt" and "output" are required'}), 400
+def api_fragility_map():
     try:
-        result = build_fragility_map(prompt, output, words, trials=trials)
-        return jsonify(result)
+        body = request.get_json(force=True)
+        prompt = (body.get("prompt") or "").strip()
+        output = (body.get("output") or "").strip()
+        if not prompt or not output:
+            return jsonify({"error": "prompt and output are required."}), 400
+
+        data = build_fragility_map(prompt, output)
+        return jsonify(data)
     except Exception as e:
-        app.logger.exception("Error in fragility_map")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/paraphrase_robustness", methods=["POST"])
-def http_paraphrase_robustness():
-    data = request.json or {}
-    prompt = data.get("prompt")
-    output = data.get("output")
-    n = int(data.get("num_paraphrases", 3))
-    if not prompt or not output:
-        return jsonify({"error": '"prompt" and "output" are required'}), 400
+def api_paraphrase_robustness():
     try:
-        result = paraphrase_robustness(prompt, output, num_paraphrases=n)
-        return jsonify(result)
+        body = request.get_json(force=True)
+        prompt = (body.get("prompt") or "").strip()
+        output = (body.get("output") or "").strip()
+        if not prompt or not output:
+            return jsonify({"error": "prompt and output are required."}), 400
+
+        data = build_paraphrase_robustness(prompt, output)
+        return jsonify(data)
     except Exception as e:
-        app.logger.exception("Error in paraphrase_robustness")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/bias_probe", methods=["POST"])
-def http_bias_probe():
-    data = request.json or {}
-    prompt = data.get("prompt")
-    output = data.get("output")
-    if not prompt or not output:
-        return jsonify({"error": '"prompt" and "output" are required'}), 400
+def api_bias_probe():
     try:
-        result = run_bias_probe(prompt, output)
-        return jsonify(result)
+        body = request.get_json(force=True)
+        prompt = (body.get("prompt") or "").strip()
+        output = (body.get("output") or "").strip()
+        if not prompt or not output:
+            return jsonify({"error": "prompt and output are required."}), 400
+
+        data = build_bias_probe(prompt, output)
+        return jsonify(data)
     except Exception as e:
-        app.logger.exception("Error in bias_probe")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/prompt_genome", methods=["POST"])
-def http_prompt_genome():
-    data = request.json or {}
-    prompt = data.get("prompt")
-    output = data.get("output")
-    if not prompt or not output:
-        return jsonify({"error": '"prompt" and "output" are required'}), 400
+def api_prompt_genome():
     try:
-        result = build_prompt_genome(prompt, output)
-        return jsonify(result)
+        body = request.get_json(force=True)
+        prompt = (body.get("prompt") or "").strip()
+        output = (body.get("output") or "").strip()
+        if not prompt or not output:
+            return jsonify({"error": "prompt and output are required."}), 400
+
+        data = build_prompt_genome(prompt, output)
+        return jsonify(data)
     except Exception as e:
-        app.logger.exception("Error in prompt_genome")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/temperature_sensitivity", methods=["POST"])
-def http_temperature_sensitivity():
-    data = request.json or {}
-    prompt = data.get("prompt")
-    output = data.get("output")
-    temps = data.get("temperatures") or [0.2, 0.7, 1.2]
-    if not prompt or not output:
-        return jsonify({"error": '"prompt" and "output" are required'}), 400
+def api_temperature_sensitivity():
     try:
-        result = temperature_sensitivity(prompt, output, temps)
-        return jsonify(result)
+        body = request.get_json(force=True)
+        prompt = (body.get("prompt") or "").strip()
+        if not prompt:
+            return jsonify({"error": "prompt is required."}), 400
+
+        data = build_temperature_sensitivity(prompt)
+        return jsonify(data)
     except Exception as e:
-        app.logger.exception("Error in temperature_sensitivity")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/reliability_certificate", methods=["POST"])
-def http_reliability_certificate():
-    data = request.json or {}
-    prompt = data.get("prompt")
-    output = data.get("output")
-    if not prompt or not output:
-        return jsonify({"error": '"prompt" and "output" are required'}), 400
+def api_reliability_certificate():
     try:
-        result = build_reliability_certificate(prompt, output)
-        return jsonify(result)
+        body = request.get_json(force=True)
+        prompt = (body.get("prompt") or "").strip()
+        output = (body.get("output") or "").strip()
+        if not prompt or not output:
+            return jsonify({"error": "prompt and output are required."}), 400
+
+        data = build_reliability_certificate(prompt, output)
+        return jsonify(data)
     except Exception as e:
-        app.logger.exception("Error in reliability_certificate")
         return jsonify({"error": str(e)}), 500
 
 
+# ----------------------------- 7. ENTRYPOINT --------------------------------
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    port = int(os.getenv("PORT", "8000"))
+    app.run(host="0.0.0.0", port=port, debug=False)
+
