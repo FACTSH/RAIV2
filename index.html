@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Responsible Prompting Toolkit – Advanced</title>
+
+  <link rel="icon" type="image/png" href="factsh.jpeg" />
+
+  <style>
+    :root {
+      --bg: #020617;
+      --card-bg: rgba(15, 23, 42, 0.98);
+      --card-border: rgba(148, 163, 184, 0.4);
+      --card-border-soft: rgba(148, 163, 184, 0.15);
+      --text-primary: #e5e7eb;
+      --text-muted: #9ca3af;
+      --accent-primary: #6366f1;
+      --accent-secondary: #22c55e;
+      --accent-warn: #f97316;
+      --accent-info: #06b6d4;
+      --danger: #f97373;
+      --radius-lg: 20px;
+      --radius-md: 10px;
+      --font-main: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+        Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", "Courier New", monospace;
+      --shadow-soft: 0 18px 45px rgba(15, 23, 42, 0.9);
+      --shadow-button: 0 10px 30px rgba(15, 23, 42, 0.7);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 32px 20px 40px;
+      font-family: var(--font-main);
+      color: var(--text-primary);
+      background:
+        radial-gradient(circle at top, #1d2748 0, transparent 55%),
+        radial-gradient(circle at top right, #4c1d95 0, transparent 50%),
+        radial-gradient(circle at bottom left, #0f766e 0, transparent 50%),
+        var(--bg);
+      min-height: 100vh;
+    }
+
+    header {
+      max-width: 1280px;
+      margin: 0 auto 28px;
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    #app-logo {
+      height: 110px;
+      width: 110px;
+      border-radius: 24px;
+      object-fit: cover;
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.4);
+      background: #020617;
+    }
+
+    .header-text h1 {
+      margin: 0;
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+
+    .header-text p {
+      margin: 6px 0 0;
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      max-width: 680px;
+    }
+
+    .header-text p + p {
+      margin-top: 4px;
+      font-size: 0.88rem;
+    }
+
+    .grid-main {
+      max-width: 1280px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1.1fr 1.4fr;
+      gap: 18px;
+    }
+
+    .card {
+      background: radial-gradient(circle at top left, #111827 0, #020617 70%);
+      border-radius: var(--radius-lg);
+      padding: 18px 18px 16px;
+      border: 1px solid var(--card-border-soft);
+      box-shadow: var(--shadow-soft);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    h3 {
+      margin: 0;
+      font-size: 1.02rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: #c7d2fe;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    h3 span.step {
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.7rem;
+      border: 1px solid rgba(129, 140, 248, 0.4);
+      background: rgba(79, 70, 229, 0.2);
+    }
+
+    p.description {
+      margin: 0;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+    }
+
+    .explain {
+      margin: 2px 0 0;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .explain b {
+      color: #e5e7eb;
+      font-weight: 600;
+    }
+
+    textarea,
+    input[type="text"],
+    input[type="number"] {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: var(--radius-md);
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      background: #020617;
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      resize: vertical;
+      min-height: 100px;
+      outline: none;
+    }
+
+    input[type="text"],
+    input[type="number"] {
+      min-height: auto;
+      font-size: 0.86rem;
+    }
+
+    textarea::placeholder,
+    input::placeholder {
+      color: rgba(148, 163, 184, 0.7);
+    }
+
+    textarea:focus,
+    input:focus {
+      border-color: rgba(129, 140, 248, 0.85);
+      box-shadow: 0 0 0 1px rgba(129, 140, 248, 0.4);
+    }
+
+    button {
+      border: none;
+      border-radius: 999px;
+      padding: 9px 16px;
+      font-size: 0.88rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      color: #f9fafb;
+      background: var(--accent-primary);
+      box-shadow: var(--shadow-button);
+      transition: transform 0.16s ease-out, box-shadow 0.16s ease-out,
+        filter 0.16s ease-out, opacity 0.16s ease-out;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      filter: brightness(1.05);
+      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.9);
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      box-shadow: none;
+      cursor: default;
+    }
+
+    .status-line {
+      min-height: 1.1em;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      background: #020617;
+      border-radius: 12px;
+      padding: 10px 12px;
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      margin: 6px 0 0;
+      max-height: 260px;
+      overflow: auto;
+    }
+
+    .section-title {
+      margin: 26px auto 10px;
+      max-width: 1280px;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      color: rgba(148, 163, 184, 0.9);
+    }
+
+    .grid-advanced {
+      max-width: 1280px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      color: var(--text-muted);
+      margin-left: 8px;
+    }
+
+    .btn-secondary {
+      background: linear-gradient(120deg, #22c55e, #16a34a);
+    }
+
+    .btn-warn {
+      background: linear-gradient(120deg, #f97316, #ea580c);
+    }
+
+    .btn-info {
+      background: linear-gradient(120deg, #06b6d4, #0891b2);
+    }
+
+    .btn-soft {
+      background: linear-gradient(120deg, #4b5563, #374151);
+    }
+
+    @media (max-width: 1100px) {
+      .grid-main {
+        grid-template-columns: 1fr;
+      }
+      .grid-advanced {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 768px) {
+      body {
+        padding: 20px 12px 24px;
+      }
+      .grid-advanced {
+        grid-template-columns: 1fr;
+      }
+      header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      #app-logo {
+        height: 90px;
+        width: 90px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="factsh.jpeg" alt="Logo" id="app-logo" />
+    <div class="header-text">
+      <h1>Responsible Prompting Toolkit – Advanced</h1>
+      <p>
+        This dashboard starts from a simple prompt and answer, then helps you see
+        <b>which words truly matter</b>, where the model is <b>steady or shaky</b>,
+        and how <b>fair and reliable</b> your prompt feels.
+      </p>
+      <p>
+        First finish the top row (Prompt → Answer → Quick analysis). Once that’s done,
+        all the tiles below unlock so you can explore “what-if” changes and view
+        a gentle health-check for your prompt.
+      </p>
+    </div>
+  </header>
+
+  <!-- BASIC FLOW -->
+
+  <div class="grid-main">
+    <div class="card">
+      <h3><span class="step">1</span>Write your prompt</h3>
+      <p class="description">
+        Keep it short (up to 20 words). This becomes the “base” version we compare everything to.
+      </p>
+      <p class="explain">
+        <b>What:</b> The message you send to the AI.<br />
+        <b>Why:</b> Tiny changes here can lead to very different answers.<br />
+        <b>How:</b> Type your prompt, then press <b>Generate Answer</b>.
+      </p>
+      <textarea id="prompt-input">Write a short, formal, and polite email to my manager about a sick day.</textarea>
+      <button id="btn-generate" class="btn-secondary">Generate Answer</button>
+      <div id="status-generate" class="status-line"></div>
+    </div>
+
+    <div class="card">
+      <h3><span class="step">2</span>See the answer</h3>
+      <p class="description">
+        The AI’s reply to your prompt. All later tiles compare back to this answer.
+      </p>
+      <p class="explain">
+        <b>What:</b> One concrete response from the model.<br />
+        <b>Why:</b> This is our “reference” answer for all the what-if checks.<br />
+        <b>How:</b> After it appears, click <b>Look inside this answer</b>.
+      </p>
+      <textarea id="output-display" readonly placeholder="Answer will appear here..."></textarea>
+      <button id="btn-analyze" disabled>Look inside this answer</button>
+      <div id="status-analyze" class="status-line"></div>
+    </div>
+
+    <div class="card">
+      <h3><span class="step">3</span>Words that shaped the answer</h3>
+      <p class="description">
+        A helper model highlights which words in your prompt seem to guide the answer the most.
+      </p>
+      <p class="explain">
+        <b>What:</b> A simple “hot and cool” view of your prompt, plus links from prompt words to pieces of the answer.<br />
+        <b>Why:</b> Gives you an easy first sense of which phrases are doing the heavy lifting.<br />
+        <b>How:</b> Use <b>Look inside this answer</b>; this box fills automatically.
+      </p>
+      <div id="analysis-display">
+        <em>Run “Look inside this answer” to see highlighted words and links.</em>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="step">A</span>Try removing words</h3>
+      <p class="description">
+        Take out a few words from your prompt and see how strongly the answer changes.
+      </p>
+      <p class="explain">
+        <b>What:</b> A “strip-down” test that removes words like “formal” or “polite”.<br />
+        <b>Why:</b> Shows which words are just decoration and which ones truly change the reply.<br />
+        <b>How:</b> After the quick analysis, list words (e.g., <code>formal, polite</code>) and click
+        <b>Run remove-words test</b>.
+      </p>
+      <input id="ablation-input" type="text" placeholder="e.g., formal, polite" />
+      <button id="btn-ablate" class="btn-warn" disabled>Run remove-words test</button>
+      <div id="status-ablation" class="status-line"></div>
+    </div>
+
+    <div class="card">
+      <h3><span class="step">B</span>Try swapping words</h3>
+      <p class="description">
+        Gently rewrite the prompt by swapping words (for example “formal” → “friendly”) and compare the outcome.
+      </p>
+      <p class="explain">
+        <b>What:</b> A “what-if” test where we replace chosen words with alternatives.<br />
+        <b>Why:</b> Helps you see how the tone or style shifts when you change the instruction slightly.<br />
+        <b>How:</b> After the quick analysis, add one swap per line (e.g., <code>formal, friendly</code>)
+        and click <b>Run swap-words test</b>.
+      </p>
+      <textarea id="counterfactual-input" style="min-height: 80px;" placeholder="formal, friendly&#10;polite, casual"></textarea>
+      <button id="btn-counterfactual" class="btn-info" disabled>Run swap-words test</button>
+      <div id="status-counterfactual" class="status-line"></div>
+    </div>
+
+    <div class="card">
+      <h3><span class="step">4</span>Before & after</h3>
+      <p class="description">
+        Compare the original and new versions side by side, with a simple 1–10 change score.
+      </p>
+      <p class="explain">
+        <b>What:</b> A paired view of old vs. new prompt and answer.<br />
+        <b>Why:</b> Makes the impact of your edits very clear and easy to read.<br />
+        <b>How:</b> Run either test above; this box updates on its own.
+      </p>
+      <div id="experiment-display">
+        <em>Run one of the tests above to see a before-and-after view.</em>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADVANCED SECTION -->
+
+  <div class="section-title">Deeper checks (unlock after quick analysis)</div>
+
+  <div class="grid-advanced">
+    <!-- 1. Causal heatmap (renamed for users) -->
+    <div class="card">
+      <h3>Word influence check <span class="tag">Deeper test</span></h3>
+      <p class="description">We quietly remove one word at a time and see how strongly the answer reacts.</p>
+      <p class="explain">
+        <b>What:</b> A stronger version of the highlights view, based on real changes in the answer.<br />
+        <b>Why:</b> Tells you which words the model cannot ignore.<br />
+        <b>How:</b> After the quick analysis, click <b>Check word influence</b>; we test key words for you.
+      </p>
+      <button id="btn-causal" class="btn-secondary" disabled>Check word influence</button>
+      <div id="status-causal" class="status-line"></div>
+      <pre id="causal-display"></pre>
+    </div>
+
+    <!-- 2. Fragility map -->
+    <div class="card">
+      <h3>Steadiness map <span class="tag">Is it jumpy?</span></h3>
+      <p class="description">See which words make the model calm and which ones make it behave unpredictably.</p>
+      <p class="explain">
+        <b>What:</b> We repeat the word-removal test several times and watch how much the answer bounces around.<br />
+        <b>Why:</b> High ups-and-downs mean the model is touchy and less trustworthy for that word.<br />
+        <b>How:</b> Choose how many tries you want, then click <b>Check steadiness</b> after the quick analysis.
+      </p>
+      <label style="font-size:0.8rem;color:var(--text-muted);">
+        Tries per word:
+        <input id="fragility-trials" type="number" min="2" max="6" value="3" style="width:60px;margin-left:6px;">
+      </label>
+      <button id="btn-fragility" class="btn-warn" disabled>Check steadiness</button>
+      <div id="status-fragility" class="status-line"></div>
+      <pre id="fragility-display"></pre>
+    </div>
+
+    <!-- 3. Paraphrase robustness -->
+    <div class="card">
+      <h3>Re-phrasing check <span class="tag">Same meaning?</span></h3>
+      <p class="description">We re-word your prompt in a few different ways and see if the answer stays similar.</p>
+      <p class="explain">
+        <b>What:</b> Several friendly re-phrasings of your prompt and their answers.<br />
+        <b>Why:</b> A good prompt should keep roughly the same behavior, even if you say it differently.<br />
+        <b>How:</b> Pick how many re-phrasings you want, then click <b>Run re-phrasing check</b>.
+      </p>
+      <label style="font-size:0.8rem;color:var(--text-muted);">
+        Re-phrasings:
+        <input id="para-count" type="number" min="2" max="6" value="3" style="width:60px;margin-left:6px;">
+      </label>
+      <button id="btn-paraphrase" class="btn-info" disabled>Run re-phrasing check</button>
+      <div id="status-paraphrase" class="status-line"></div>
+      <pre id="paraphrase-display"></pre>
+    </div>
+
+    <!-- 4. Bias probe -->
+    <div class="card">
+      <h3>Fairness check <span class="tag">Sensitive swaps</span></h3>
+      <p class="description">Swap things like gender or age in the prompt and see whether the tone changes unfairly.</p>
+      <p class="explain">
+        <b>What:</b> A set of gentle “swap this person for that person” tests along a few everyday categories.<br />
+        <b>Why:</b> Helps you notice if the answer treats people differently when only one detail changes.<br />
+        <b>How:</b> After the quick analysis, press <b>Run fairness check</b> and read the short notes per category.
+      </p>
+      <button id="btn-bias" class="btn-warn" disabled>Run fairness check</button>
+      <div id="status-bias" class="status-line"></div>
+      <pre id="bias-display"></pre>
+    </div>
+
+    <!-- 5. Prompt genome -->
+    <div class="card">
+      <h3>Prompt building blocks <span class="tag">Structure</span></h3>
+      <p class="description">Break your prompt into small pieces and see what role each piece seems to play.</p>
+      <p class="explain">
+        <b>What:</b> Groups of words that act like “blocks” for tone, safety, length, or task.<br />
+        <b>Why:</b> Makes it easier to rewrite your prompt by tweaking one block at a time instead of the whole thing.<br />
+        <b>How:</b> After the quick analysis, click <b>Show building blocks</b> to see names and short explanations.
+      </p>
+      <button id="btn-genome" class="btn-secondary" disabled>Show building blocks</button>
+      <div id="status-genome" class="status-line"></div>
+      <pre id="genome-display"></pre>
+    </div>
+
+    <!-- 6. Temperature sensitivity -->
+    <div class="card">
+      <h3>Creativity slider test <span class="tag">Calm vs playful</span></h3>
+      <p class="description">Turn the model’s “creativity” up and down and see how wild the answers become.</p>
+      <p class="explain">
+        <b>What:</b> Several answers at different creativity levels, each compared back to your original one.<br />
+        <b>Why:</b> Shows whether your prompt stays clear when the model is more free-flowing.<br />
+        <b>How:</b> Optionally edit the list of creativity levels, then click <b>Run creativity test</b>.
+      </p>
+      <input id="temp-list" type="text" placeholder="0.2, 0.7, 1.2" />
+      <button id="btn-temp" class="btn-info" disabled>Run creativity test</button>
+      <div id="status-temp" class="status-line"></div>
+      <pre id="temp-display"></pre>
+    </div>
+
+    <!-- 7. Reliability certificate -->
+    <div class="card">
+      <h3>Prompt health card <span class="tag">Big picture</span></h3>
+      <p class="description">A short summary that scores how steady, fair, and trustworthy your prompt feels overall.</p>
+      <p class="explain">
+        <b>What:</b> A simple “High / Medium / Low” style rating with a few plain-language reasons.<br />
+        <b>Why:</b> Helps you quickly decide whether this prompt is ready to use or needs a bit more care.<br />
+        <b>How:</b> After running the quick analysis, press <b>Create health card</b>.
+      </p>
+      <button id="btn-reliability" class="btn-soft" disabled>Create health card</button>
+      <div id="status-reliability" class="status-line"></div>
+      <pre id="reliability-display"></pre>
+    </div>
+  </div>
+
+  <script>
+    const promptInput = document.getElementById("prompt-input");
+    const outputDisplay = document.getElementById("output-display");
+
+    const btnGenerate = document.getElementById("btn-generate");
+    const btnAnalyze = document.getElementById("btn-analyze");
+    const btnAblate = document.getElementById("btn-ablate");
+    const btnCounterfactual = document.getElementById("btn-counterfactual");
+
+    const statusGenerate = document.getElementById("status-generate");
+    const statusAnalyze = document.getElementById("status-analyze");
+    const statusAblation = document.getElementById("status-ablation");
+    const statusCounterfactual = document.getElementById("status-counterfactual");
+
+    const analysisDisplay = document.getElementById("analysis-display");
+    const ablationInput = document.getElementById("ablation-input");
+    const counterfactualInput = document.getElementById("counterfactual-input");
+    const experimentDisplay = document.getElementById("experiment-display");
+
+    // Advanced elements
+    const btnCausal = document.getElementById("btn-causal");
+    const btnFragility = document.getElementById("btn-fragility");
+    const btnParaphrase = document.getElementById("btn-paraphrase");
+    const btnBias = document.getElementById("btn-bias");
+    const btnGenome = document.getElementById("btn-genome");
+    const btnTemp = document.getElementById("btn-temp");
+    const btnReliability = document.getElementById("btn-reliability");
+
+    const statusCausal = document.getElementById("status-causal");
+    const statusFragility = document.getElementById("status-fragility");
+    const statusParaphrase = document.getElementById("status-paraphrase");
+    const statusBias = document.getElementById("status-bias");
+    const statusGenome = document.getElementById("status-genome");
+    const statusTemp = document.getElementById("status-temp");
+    const statusReliability = document.getElementById("status-reliability");
+
+    const causalDisplay = document.getElementById("causal-display");
+    const fragilityDisplay = document.getElementById("fragility-display");
+    const paraphraseDisplay = document.getElementById("paraphrase-display");
+    const biasDisplay = document.getElementById("bias-display");
+    const genomeDisplay = document.getElementById("genome-display");
+    const tempDisplay = document.getElementById("temp-display");
+    const reliabilityDisplay = document.getElementById("reliability-display");
+
+    const fragilityTrials = document.getElementById("fragility-trials");
+    const paraCount = document.getElementById("para-count");
+    const tempList = document.getElementById("temp-list");
+
+    const appState = {
+      original_prompt: "",
+      original_output: "",
+      original_analysis: null,
+      analysis_done: false,
+    };
+
+    let isLoadingBasic = false;
+
+    function setStatus(el, msg, isError = false) {
+      if (!el) return;
+      el.textContent = msg;
+      el.style.color = isError ? "#f97373" : "var(--text-muted)";
+    }
+
+    function clearStatuses() {
+      [
+        statusGenerate,
+        statusAnalyze,
+        statusAblation,
+        statusCounterfactual,
+        statusCausal,
+        statusFragility,
+        statusParaphrase,
+        statusBias,
+        statusGenome,
+        statusTemp,
+        statusReliability,
+      ].forEach((el) => el && (el.textContent = ""));
+    }
+
+    function updateButtonStates() {
+      btnGenerate.disabled = isLoadingBasic;
+      btnAnalyze.disabled = isLoadingBasic || !appState.original_output;
+
+      const postAnalysisEnabled = !isLoadingBasic && appState.analysis_done;
+
+      [
+        btnAblate,
+        btnCounterfactual,
+        btnCausal,
+        btnFragility,
+        btnParaphrase,
+        btnBias,
+        btnGenome,
+        btnTemp,
+        btnReliability,
+      ].forEach((btn) => {
+        if (!btn) return;
+        btn.disabled = !postAnalysisEnabled;
+      });
+    }
+
+    function requireBase(el, needAnalysis = false) {
+      if (!appState.original_prompt || !appState.original_output) {
+        setStatus(el, "First generate an answer.", true);
+        return false;
+      }
+      if (needAnalysis && !appState.analysis_done) {
+        setStatus(el, "First run “Look inside this answer”.", true);
+        return false;
+      }
+      return true;
+    }
+
+    // ---------------- BASIC FLOW ----------------
+
+    btnGenerate.addEventListener("click", async () => {
+      clearStatuses();
+      isLoadingBasic = true;
+      updateButtonStates();
+
+      const prompt = promptInput.value.trim();
+      if (!prompt) {
+        setStatus(statusGenerate, "Please enter a prompt.", true);
+        isLoadingBasic = false;
+        updateButtonStates();
+        return;
+      }
+
+      if (prompt.split(/\s+/).length > 20) {
+        setStatus(statusGenerate, "Keep the prompt within 20 words.", true);
+        isLoadingBasic = false;
+        updateButtonStates();
+        return;
+      }
+
+      setStatus(statusGenerate, "Asking the model...");
+      analysisDisplay.innerHTML =
+        "<em>Run “Look inside this answer” to see highlighted words and links.</em>";
+      outputDisplay.value = "";
+      experimentDisplay.innerHTML =
+        "<em>Run one of the tests above to see a before-and-after view.</em>";
+      appState.original_analysis = null;
+      appState.analysis_done = false;
+
+      try {
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || `Server error ${res.status}`);
+        }
+
+        appState.original_prompt = prompt;
+        appState.original_output = data.output || "";
+        outputDisplay.value = appState.original_output;
+        setStatus(statusGenerate, "Answer ready. Now click “Look inside this answer”.");
+      } catch (err) {
+        console.error(err);
+        setStatus(statusGenerate, err.message, true);
+      } finally {
+        isLoadingBasic = false;
+        updateButtonStates();
+      }
+    });
+
+    btnAnalyze.addEventListener("click", async () => {
+      clearStatuses();
+
+      if (!requireBase(statusAnalyze)) return;
+
+      isLoadingBasic = true;
+      updateButtonStates();
+      setStatus(statusAnalyze, "Looking inside the answer...");
+
+      try {
+        const res = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: appState.original_prompt,
+            output: appState.original_output,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || `Server error ${res.status}`);
+        }
+
+        appState.original_analysis = data;
+        appState.analysis_done = true;
+
+        const heatmap = (data.heatmap_data || [])
+          .map(
+            (h) =>
+              `${h.word || ""}: ${Number(h.impact_score || 0).toFixed(2)}`
+          )
+          .join("\n");
+
+        const connections = (data.connections || [])
+          .map(
+            (c) =>
+              `${c.prompt_word || ""} (${c.impact_score || ""}) -> ${(c.influenced_output_words || []).join(", ")}`
+          )
+          .join("\n");
+
+        analysisDisplay.innerHTML =
+          `<b>Highlighted words:</b><pre>${heatmap || "None"}</pre>` +
+          `<b>Prompt → answer links:</b><pre>${connections || "None"}</pre>`;
+
+        if (Array.isArray(data.heatmap_data)) {
+          const topWords = data.heatmap_data
+            .filter((x) => (x.impact_score || 0) >= 3.5 && x.word)
+            .map((x) => x.word);
+          ablationInput.value = [...new Set(topWords)].join(", ");
+        }
+
+        setStatus(
+          statusAnalyze,
+          "Done. All tests and deeper checks are now unlocked."
+        );
+      } catch (err) {
+        console.error(err);
+        setStatus(statusAnalyze, err.message, true);
+      } finally {
+        isLoadingBasic = false;
+        updateButtonStates();
+      }
+    });
+
+    btnAblate.addEventListener("click", async () => {
+      clearStatuses();
+      if (!requireBase(statusAblation, true)) return;
+
+      const changes = ablationInput.value.trim();
+      if (!changes) {
+        setStatus(statusAblation, "Type at least one word to remove.", true);
+        return;
+      }
+
+      isLoadingBasic = true;
+      updateButtonStates();
+      setStatus(statusAblation, "Trying without those words...");
+
+      try {
+        const res = await fetch("/api/run_experiment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "ablation",
+            original_prompt: appState.original_prompt,
+            original_output: appState.original_output,
+            changes,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || `Server error ${res.status}`);
+        }
+
+        experimentDisplay.innerHTML =
+          `<b>Original prompt:</b><pre>${appState.original_prompt}</pre>` +
+          `<b>Prompt without those words:</b><pre>${data.new_prompt}</pre>` +
+          `<b>Original answer:</b><pre>${appState.original_output}</pre>` +
+          `<b>New answer:</b><pre>${data.new_output}</pre>` +
+          `<b>Change score (1–10):</b> ${data.change_data.semantic_change_score} – ${data.change_data.change_summary}`;
+        setStatus(statusAblation, "Test finished.");
+      } catch (err) {
+        console.error(err);
+        setStatus(statusAblation, err.message, true);
+      } finally {
+        isLoadingBasic = false;
+        updateButtonStates();
+      }
+    });
+
+    btnCounterfactual.addEventListener("click", async () => {
+      clearStatuses();
+      if (!requireBase(statusCounterfactual, true)) return;
+
+      const changes = counterfactualInput.value.trim();
+      if (!changes) {
+        setStatus(
+          statusCounterfactual,
+          "Add at least one line like: formal, friendly",
+          true
+        );
+        return;
+      }
+
+      isLoadingBasic = true;
+      updateButtonStates();
+      setStatus(statusCounterfactual, "Trying swapped words...");
+
+      try {
+        const res = await fetch("/api/run_experiment", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "counterfactual",
+            original_prompt: appState.original_prompt,
+            original_output: appState.original_output,
+            changes,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || `Server error ${res.status}`);
+        }
+
+        experimentDisplay.innerHTML =
+          `<b>Original prompt:</b><pre>${appState.original_prompt}</pre>` +
+          `<b>Prompt with swapped words:</b><pre>${data.new_prompt}</pre>` +
+          `<b>Original answer:</b><pre>${appState.original_output}</pre>` +
+          `<b>New answer:</b><pre>${data.new_output}</pre>` +
+          `<b>Change score (1–10):</b> ${data.change_data.semantic_change_score} – ${data.change_data.change_summary}`;
+        setStatus(statusCounterfactual, "Test finished.");
+      } catch (err) {
+        console.error(err);
+        setStatus(statusCounterfactual, err.message, true);
+      } finally {
+        isLoadingBasic = false;
+        updateButtonStates();
+      }
+    });
+
+    // ---------------- ADVANCED HELPERS ----------------
+
+    async function callAdvanced(endpoint, body, statusEl, displayEl) {
+      clearStatuses();
+      if (!requireBase(statusEl, true)) return;
+
+      statusEl.textContent = "Working...";
+      statusEl.style.color = "var(--text-muted)";
+      displayEl.textContent = "";
+
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: appState.original_prompt,
+            output: appState.original_output,
+            ...body,
+          }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || `Server error ${res.status}`);
+        }
+
+        displayEl.textContent = JSON.stringify(data, null, 2);
+        statusEl.textContent = "Done.";
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = err.message;
+        statusEl.style.color = "#f97373";
+      }
+    }
+
+    // ---------------- ADVANCED BUTTONS ----------------
+
+    btnCausal.addEventListener("click", () =>
+      callAdvanced("/api/causal_heatmap", {}, statusCausal, causalDisplay)
+    );
+
+    btnFragility.addEventListener("click", () => {
+      const trials = parseInt(fragilityTrials.value || "3", 10);
+      callAdvanced(
+        "/api/fragility_map",
+        { trials },
+        statusFragility,
+        fragilityDisplay
+      );
+    });
+
+    btnParaphrase.addEventListener("click", () => {
+      const num_paraphrases = parseInt(paraCount.value || "3", 10);
+      callAdvanced(
+        "/api/paraphrase_robustness",
+        { num_paraphrases },
+        statusParaphrase,
+        paraphraseDisplay
+      );
+    });
+
+    btnBias.addEventListener("click", () =>
+      callAdvanced("/api/bias_probe", {}, statusBias, biasDisplay)
+    );
+
+    btnGenome.addEventListener("click", () =>
+      callAdvanced("/api/prompt_genome", {}, statusGenome, genomeDisplay)
+    );
+
+    btnTemp.addEventListener("click", () => {
+      const raw = tempList.value.trim();
+      let temps = null;
+      if (raw) {
+        temps = raw.split(",").map((x) => parseFloat(x.trim())).filter((x) => !isNaN(x));
+      }
+      callAdvanced(
+        "/api/temperature_sensitivity",
+        temps ? { temperatures: temps } : {},
+        statusTemp,
+        tempDisplay
+      );
+    });
+
+    btnReliability.addEventListener("click", () =>
+      callAdvanced(
+        "/api/reliability_certificate",
+        {},
+        statusReliability,
+        reliabilityDisplay
+      )
+    );
+
+    // Initial state
+    updateButtonStates();
+  </script>
+</body>
+</html>
+
+
